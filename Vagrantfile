@@ -2,57 +2,75 @@
 # vi: set ft=ruby :
 
 cfg = {
-  :vm_count => 4, # If set to 0 a set of VM`s will be created with the definitions in boxes below. Of > 0 then the general cfg (vm_cpus, vm_memory) is used.
-  :vm_prefix => "prefix", # Prefix that will be used for creating the clusters.
-  :vm_cpus => 2, # Number of CPU cores each VM should have when using the vm_count.
-  :vm_memory => 2048, # Amount of memory each VM should have when using the vm_count.
-  :vm_box => "generic/ubuntu1804",  #"generic/rhel7", "centos/7", # Image to use for the VM`s.
-  :ssh_priv => "/path/to/ssh/private/key",  # Path of the private SSH key that you want to use to connect to the VMs
-  :ssh_public => "/path/to/ssh/public/key",  # Path of the public SSH key that you want to use to connect to the VMs
-  :network_switch => "switchname"  # The network switch you want to use to connect the VMs to. THis must be created in Hyper-V manager before hand and needs to be an external switch.
+  :vagrant_provider => "vbox",
+  :vm_count => 1,
+  :vm_prefix => "testing",
+  :vm_cpus => 2,
+  :vm_memory => 2048,
+  :vm_box => "generic/ubuntu1804",
+  :ssh_priv => "/home/.ssh/id_rsa",
+  :ssh_public => "/home/.ssh/id_rsa.pub",
+  :public_network_bridge => "wlp4s0",
+  :private_network_ip => "192.168.30.0"
 }
 
-# if vm_count is set to 0 the bolow config will be used to create the VMs with the specifications.
 boxes = [
   {
-    :name => "Kubernetes Master", 
+    :name => "Kubernetes Master",
     :hostname => "kmaster",
     :memory => 2048,
-    :cpus => 2, 
+    :cpus => 2,
   },
   {
-    :name => "Kubernetes Node 1", 
+    :name => "Kubernetes Node 1",
     :hostname => "knode1",
     :memory => 2048,
     :cpus => 2
-  }, 
-  {
-    :name => "Kubernetes Node 2", 
-    :hostname => "knode2",
-    :memory => 2048,
-    :cpus => 2, 
   }
 ]
-  
+
 if cfg[:vm_count] > 0
   boxes = []
   for i in 1..cfg[:vm_count] do
     m = {
-      :name => cfg[:vm_prefix] + i.to_s, 
+      :name => cfg[:vm_prefix] + i.to_s,
       :hostname => cfg[:vm_prefix] + i.to_s,
       :memory => cfg[:vm_memory],
-      :cpus => cfg[:cpus], 
-    } 
+      :cpus => cfg[:cpus],
+    }
     boxes << m
   end
 end
-  
+
+def network_options(cfg)
+  options = {}
+
+  if cfg.has_key?('private_network_ip')
+    options[:ip] = cfg['private_network_ip']
+    options[:netmask] = cfg['netmask'] ||= '255.255.255.0'
+  else
+    options[:type] = 'dhcp'
+  end
+
+  # if host.has_key?('mac')
+  #   options[:mac] = host['mac'].gsub(/[-:]/, '')
+  # end
+  # if host.has_key?('auto_config')
+  #   options[:auto_config] = host['auto_config']
+  # end
+  # if host.has_key?('intnet') && host['intnet']
+  #   options[:virtualbox__intnet] = true
+  #end
+
+  options
+end
+
 Vagrant.configure(2) do |config|
   config.vm.box = "#{cfg[:vm_box]}"
-  config.vm.network "public_network", bridge: "#{cfg[:network_switch]}"
+  config.vm.network "public_network", bridge: "#{cfg[:public_network_bridge]}"
 
   config.vm.provision "file", source: "#{cfg[:ssh_priv]}", destination: "/home/vagrant/.ssh/id_rsa"
-  public_key = File.read("#{cfg[:ssh_public]}") 
+  public_key = File.read("#{cfg[:ssh_public]}")
   config.vm.provision :shell, :inline =>"
           echo 'Copying SSH Keys to the VM'
           mkdir -p /home/vagrant/.ssh
@@ -68,12 +86,13 @@ Vagrant.configure(2) do |config|
           echo ip: $ip
           echo hostname: $HOSTNAME
           ", privileged: false
-  
+
   boxes.each do |machine|
     hostname = cfg[:vm_prefix] + "-" + machine[:hostname]
     config.vm.define "#{hostname}" do |m|
       m.vm.hostname = hostname
-      m.vm.provider "hyperv" do |v|
+      m.vm.network "private_network", network_options(machine)  #ip: "#{cfg[:private_network_ip]}"
+      m.vm.provider cfg[:vagrant_provider] do |v|
         v.vmname = cfg[:vm_prefix] + ": " + machine[:name]
         v.memory = machine[:memory]
         v.cpus = machine[:cpus]
